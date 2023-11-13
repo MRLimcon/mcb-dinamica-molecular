@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.stats import maxwell
-from numba import njit, jit
+from numba import njit, jit, prange
+from itertools import product
 
 # Constants
 e_0 = 8.8541878128e-12
@@ -21,17 +22,17 @@ class config_class:
     area = 0
 
     def make_boxes(self, new_l: list[float]):
-        # Create boxes in the simulation space
-        box_x = np.arange(0, new_l[0], self.l_box)
-        box_y = np.arange(0, new_l[1], self.l_box)
-        box_z = np.arange(0, new_l[2], self.l_box)
+        # Calculate the amount of boxes
+        amount = np.array([new_l[0] // self.l_box, new_l[1] // self.l_box, new_l[2] // self.l_box]).astype(int)
 
-        x, y, z = np.meshgrid(box_x, box_y, box_z)
-        x, y, z = x.ravel(), y.ravel(), z.ravel()
+        # Create an array of lists
+        self.boxes = np.empty((amount[0], amount[1], amount[2]), dtype=object)
 
-        # Flatten the meshgrid to create boxes
-        self.boxes = np.zeros([x.shape[0], 3])
-        self.boxes[:, 0], self.boxes[:, 1], self.boxes[:, 2] = x, y, z
+        # Initialize each element as an empty list
+        for j in range(amount[0]):
+            for k in range(amount[1]):
+                for l in range(amount[2]):
+                    self.boxes[j, k, l] = []
 
     def __init__(self, L: list[float], T: float = 273.15, sigma: float = 1, delta_t: float = 0.05):
         self.L = L
@@ -90,7 +91,7 @@ class particles_class:
 
 # Function to calculate Lennard-Jones force between particles
 def calc_lennard_jones_force(inside_positions: np.ndarray, nearby_positions: np.ndarray, force: np.ndarray, A: float, B: float):
-    for i in range(inside_positions.shape[0]):
+    for i in prange(inside_positions.shape[0]):
         # Calculate distance vectors between particles
         r = nearby_positions - inside_positions[i, :]
         normed_r = np.zeros_like(r)
@@ -132,36 +133,48 @@ def calc_lennard_jones_force(inside_positions: np.ndarray, nearby_positions: np.
             force[:i, 1] += -y_force
             force[:i, 2] += -z_force
 
+
+@jit(parallel=True, fastmath=True)
+def flatten(nearby_boxes):
+    return [item for sublist in nearby_boxes for item in sublist]
+
+
 # Function to calculate forces on particles
 def calc_force(particles: particles_class, config: config_class):
-    delta_l = config.l_box
-
     # Reset forces and apply gravitational force
     particles.force[:, :] = 0
     particles.force[:, 2] = g * particles.m
 
-    for i in np.arange(config.boxes.shape[0]):
-        box = config.boxes[i]
-        inside_box_check = (
-            np_and(particles.positions[:, 0] >= box[0], particles.positions[:, 0] <= box[0] + delta_l) &
-            np_and(particles.positions[:, 1] >= box[1], particles.positions[:, 1] <= box[1] + delta_l) &
-            np_and(particles.positions[:, 2] >= box[2], particles.positions[:, 2] <= box[2] + delta_l)
-        )
+    for j, k, l in product(range(config.boxes.shape[0]), range(config.boxes.shape[1]), range(config.boxes.shape[2])):
+        config.boxes[j, k, l] = []
 
-        nearby_box_check = (
-            np_and(particles.positions[:, 0] >= box[0] - delta_l, particles.positions[:, 0] <= box[0] + 2 * delta_l) &
-            np_and(particles.positions[:, 1] >= box[1] - delta_l, particles.positions[:, 1] <= box[1] + 2 * delta_l) &
-            np_and(particles.positions[:, 2] >= box[2] - delta_l, particles.positions[:, 2] <= box[2] + 2 * delta_l)
-        )
+    # Populate config.boxes with particle indices
+    for i in prange(particles.positions.shape[0]):
+        x = min(int(particles.positions[i, 0] // config.l_box), config.boxes.shape[0]-1)
+        y = min(int(particles.positions[i, 1] // config.l_box), config.boxes.shape[1]-1)
+        z = min(int(particles.positions[i, 2] // config.l_box), config.boxes.shape[2]-1)
+        config.boxes[x, y, z].append(i)
 
-        nearby_box_check = np_and(nearby_box_check, np.logical_not(inside_box_check))
+    for i in prange(config.boxes.shape[0]):
+        for j, k in product(range(config.boxes.shape[1]), range(config.boxes.shape[2])):
+            inside_box_check = np.array(config.boxes[i, j, k])
+            inside_box_check = inside_box_check[(inside_box_check >= 0) & (inside_box_check <= particles.positions.shape[0])]
 
-        calc_lennard_jones_force(
-            particles.positions[inside_box_check, :],
-            particles.positions[nearby_box_check, :],
-            particles.force[inside_box_check],
-            particles.A, particles.B
-        )
+            i_s = set(range(max(0, i-1), min(config.boxes.shape[0], i+2))).difference([i])
+            j_s = set(range(max(0, j-1), min(config.boxes.shape[1], j+2))).difference([j])
+            k_s = set(range(max(0, k-1), min(config.boxes.shape[2], k+2))).difference([k])
+
+            nearby_boxes = config.boxes[list(i_s), list(j_s), list(k_s)]
+            nearby_box_check = np.array(flatten(nearby_boxes), dtype=int)
+            nearby_box_check = nearby_box_check[(nearby_box_check >= 0) & (nearby_box_check <= particles.positions.shape[0])]
+
+            if inside_box_check.shape[0] > 0:
+                calc_lennard_jones_force(
+                    particles.positions[inside_box_check, :],
+                    particles.positions[nearby_box_check, :],
+                    particles.force[inside_box_check],
+                    particles.A, particles.B
+                )
 
     # Update particle velocities and positions based on calculated forces
     particles.v += (particles.force / particles.m) * config.delta_t

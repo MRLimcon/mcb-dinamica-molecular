@@ -9,8 +9,8 @@ N_particles = 2000
 L = [5, 5, 5]
 
 # Initialize configuration and particle classes using utility module
-consts = utils.config_class(L, sigma=1)
-particles = utils.particles_class(N_particles, L, sigma=1)
+consts = utils.config_class(L, sigma=0.5)
+particles = utils.particles_class(N_particles, L, sigma=0.5)
 
 # Initial plot of particle positions
 fig = plt.figure()
