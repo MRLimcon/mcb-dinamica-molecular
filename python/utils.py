@@ -81,8 +81,8 @@ class particles_class:
         self.v = np.zeros(dims)
 
         # Generate initial particle velocities based on Maxwell distribution
-        theta = np.random.rand(N) * 3.1415
-        phi = np.random.rand(N) * 3.1415 / 2.
+        theta = np.random.rand(N) * 3.1415 * 2.
+        phi = np.random.rand(N) * 3.1415
         avg_v = np.sqrt(8 * k_b * T / (np.pi * self.m))
 
         self.v[:, 0] = np.cos(theta) * np.sin(phi) * avg_v

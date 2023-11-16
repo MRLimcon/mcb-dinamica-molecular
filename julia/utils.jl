@@ -9,7 +9,7 @@ maxwell = scipy.stats.maxwell
 
 const e_0 = Float32(8.8541878128e-12)
 const k_b = Float32(1.380649e-23)
-const g = Float32(-9.8)
+const g = Float32(-1)
 
 mutable struct Config
     L::Vector{Float32}
@@ -64,8 +64,8 @@ function make_particles(N::Int, L::Vector{Float32}, mass::Float32 = Float32(1.16
 
     v = zeros(Float32, dims...)
 
-    theta = rand(N) * 3.1415
-    phi = rand(N) * 3.1415 / Float32(2.0)
+    theta = rand(N) * 3.1415 * Float32(2.0)
+    phi = rand(N) * 3.1415
     avg_v = sqrt(Float32(8) * k_b * T / (π * mass))
 
     v[:, 1] .= cos.(theta) .* sin.(phi) .* avg_v
@@ -152,6 +152,7 @@ function calc_force!(particles::Particles, config::Config)
     @sync Threads.@threads for i in 1:shape_boxes[1]
         for j in 1:shape_boxes[2], k in 1:shape_boxes[3]
             inside_box_check = config.boxes[i, j, k]
+            sort!(inside_box_check)
             inside_box_check = inside_box_check[1 .<= inside_box_check .<= size(particles.positions, 1)]
 
             i_s = setdiff(max(1, i-1):min(shape_boxes[1], i+1), i)
@@ -159,6 +160,7 @@ function calc_force!(particles::Particles, config::Config)
             k_s = setdiff(max(1, k-1):min(shape_boxes[3], k+1), k)
             
             nearby_box_check = collect(Iterators.flatten(config.boxes[i_s, j_s, k_s]))
+            sort!(nearby_box_check)
             nearby_box_check = nearby_box_check[1 .<= nearby_box_check .<= size(particles.positions, 1)]
 
             if size(inside_box_check, 1) > 0
