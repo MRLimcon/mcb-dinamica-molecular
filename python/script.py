@@ -5,12 +5,13 @@ import utils
 plt.style.use(["ggplot", "fast"])
 
 # Number of particles and simulation box dimensions
-N_particles = 2000
-L = [5, 5, 5]
+N_particles = 1000
+sigma = 0.2
+L = [1, 1, 4]
 
 # Initialize configuration and particle classes using utility module
-consts = utils.config_class(L, sigma=0.5)
-particles = utils.particles_class(N_particles, L, sigma=0.5)
+consts = utils.config_class(L, sigma=sigma, delta_t=0.01)
+particles = utils.particles_class(N_particles, L, sigma=sigma)
 
 # Initial plot of particle positions
 fig = plt.figure()
@@ -29,7 +30,7 @@ for iter in range(5000):
     utils.calc_force(particles, consts)
 
     # Handle wall interactions and optionally control temperature
-    pressure = utils.wall_interactions(particles, consts, True, 1500)
+    pressure = utils.wall_interactions(particles, consts) # , True, 1500)
 
     print(pressure)
 
