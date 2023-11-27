@@ -32,12 +32,12 @@ t_f = 20f0
 """
 
 N_particles = 1000
-sigma = Float32(0.5)
-dt = Float32(0.003)
-T = Float32(0)
+sigma = Float32(0.25)
+dt = Float32(0.005)
+T = Float32(2)
 mass = Float32(1) # .164026113e-21)
 L = [4.0f0, 4.0f0, 4.0f0]
-t_f = 5.0f0
+t_f = 20f0
 iterations = Int(div(t_f, dt))
 
 particles = Utils.make_particles(N_particles, L, mass, sigma, T, true)
@@ -66,15 +66,16 @@ for iter = 1:iterations
     global particles = Utils.calc_force(particles, consts)
 
     t = (iter - 1) * consts.delta_t
-    if t < 1.7
-        global pressure, particles = Utils.wall_interactions(particles, consts) # , true, 0.001f0)
+    if t < 10
+        global pressure, particles = Utils.wall_interactions(particles, consts) # 
     else
-        global pressure, particles = Utils.wall_interactions(particles, consts)
+        global pressure, particles = Utils.wall_interactions(particles, consts, true, 1f0)
     end
 
     println("Pressure: $pressure")
 
     camera_angle = t * 360.0
+    
     plotted = scatter(
         particles.positions[:, 1],
         particles.positions[:, 2],
@@ -90,5 +91,16 @@ for iter = 1:iterations
         label = "Time: $t",
         legend = :topleft,
     )
-    display(plotted)
+
+    display(plot!())
+    """
+
+    v2_val, v2, v_s, pdf = Utils.get_maxwell_dist(particles)
+    dist = Utils.get_cin_energy(particles) ./ ((particles.m * particles.m) * size(particles.positions, 1))
+
+    Plots.scatter([v2_val], [v2], label = "RMS Speed")
+    Plots.plot!(v_s, pdf, label = "Maxwell Distribution")
+    Plots.histogram!(dist, normalize=:pdf, label = "Histogram")
+    display(plot!())
+    """
 end

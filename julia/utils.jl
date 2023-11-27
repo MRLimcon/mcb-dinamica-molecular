@@ -258,7 +258,7 @@ function wall_interactions(
     pressure += 2 * sum(abs.(particles.v[check, 3]))
 
     if have_temp
-        norm = vec(sqrt.(sum(particles.v[check, :] .^ 2, dims = 2)))
+        norm = vec(sqrt.(sum(particles.v[check, :] .* particles.v[check, :], dims = 2)))
         particles.scale = sqrt(temp * k_b / particles.m)
         speed = maxwell.ppf(rand(sum(check)), scale = particles.scale)
         particles.v[check, 1] .= particles.v[check, 1] ./ norm .* speed

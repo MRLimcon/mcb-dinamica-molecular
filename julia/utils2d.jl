@@ -9,8 +9,8 @@ maxwell = scipy.stats.maxwell
 
 const e_0 = Float32(0.00005)# Float32(8.8541878128e-12)
 const k_b = Float32(1) # .380649e-23)
-const g = Float32(-3)
-const alpha = 1e-6
+const g = Float32(-0.5)
+const alpha = 1e-9
 const damping = 0
 
 mutable struct Config
@@ -43,7 +43,9 @@ function make_config(
     l_box = 2.5 * sigma
     boxes = make_boxes(L, Float32(l_box))
 
-    return Config(L, T, l_box, delta_t, boxes, 1.0f0)
+    area = 2 * L[1] + 2 * L[2]
+
+    return Config(L, T, l_box, delta_t, boxes, area)
 end
 
 mutable struct Particles
@@ -230,12 +232,11 @@ function wall_interactions(
     pressure += 2 * sum(abs.(particles.v[check, 2]))
 
     if have_temp
-        norm = vec(sqrt.(sum(particles.v[check, :] .^ 2, dims = 2)))
+        norm = vec(sqrt.(sum(particles.v[check, :] .* particles.v[check, :], dims = 2)))
         particles.scale = sqrt(temp * k_b / particles.m)
         speed = maxwell.ppf(rand(sum(check)), scale = particles.scale)
         particles.v[check, 1] .= particles.v[check, 1] ./ norm .* speed
         particles.v[check, 2] .= particles.v[check, 2] ./ norm .* speed
-        particles.v[check, 3] .= particles.v[check, 3] ./ norm .* speed
     end
 
     check = particles.positions[:, 2] .>= config.L[2]
@@ -248,4 +249,34 @@ function wall_interactions(
 
     return pressure, particles
 end
+
+function get_cin_energy(particles::Particles)
+    u = particles.m .* vec(sum(particles.v .* particles.v, dims = 2))
+    return u
+end
+
+function get_v2_t(particles::Particles)
+    v2 = vec(sum(particles.v .* particles.v, dims = 2))
+    v2_avg = sum(v2) / size(v2, 1)
+    t = (v2_avg * particles.m)/(3 * k_b)
+    return v2_avg, t
+end
+
+function get_maxwell_dist(particles::Particles)
+    v2, t = get_v2_t(particles)
+    particles.scale = sqrt(t * k_b / particles.m)
+    max_val = maxwell.ppf(0.99, scale = particles.scale)
+    steps = 0.01f0
+
+    v_s = collect(Float32, 0:steps:max_val)
+
+    a = sqrt(2/pi)/(particles.scale^3)
+
+    pdf = a .* v_s .* exp.(-v_s ./ (2 * (particles.scale ^ 2)))
+
+    v2_val = maxwell.ppf(v2, scale = particles.scale)
+
+    return v2_val, v2, v_s, pdf
+end
+
 end
