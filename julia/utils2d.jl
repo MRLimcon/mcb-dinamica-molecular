@@ -9,8 +9,8 @@ maxwell = scipy.stats.maxwell
 
 const e_0 = Float32(0.00005)# Float32(8.8541878128e-12)
 const k_b = Float32(1) # .380649e-23)
-const g = Float32(-0.5)
-const alpha = 1e-9
+const g = Float32(0)
+const alpha = 5e-10
 const damping = 0
 
 mutable struct Config
@@ -19,6 +19,7 @@ mutable struct Config
     l_box::Float32
     delta_t::Float32
     boxes::Array{Vector{Int}}
+    new_boxes::Array{Vector{Int}}
     area::Float32
 end
 
@@ -42,15 +43,18 @@ function make_config(
 )
     l_box = 2.5 * sigma
     boxes = make_boxes(L, Float32(l_box))
+    new_boxes = make_boxes(L, Float32(l_box))
 
     area = 2 * L[1] + 2 * L[2]
 
-    return Config(L, T, l_box, delta_t, boxes, area)
+    return Config(L, T, l_box, delta_t, boxes, new_boxes, area)
 end
 
 mutable struct Particles
     v::Matrix{Float32}
     positions::Matrix{Float32}
+    new_positions::Matrix{Float32}
+    last_positions::Matrix{Float32}
     dims::Vector{Int}
     force::Matrix{Float32}
     m::Float32
@@ -102,6 +106,8 @@ function make_particles(
     n_particles = size(positions, 1)
     dims = [n_particles, 2]
 
+    last_positions = zeros(Float32, dims...)
+    new_positions = zeros(Float32, dims...)
     force = zeros(Float32, dims...)
     v = zeros(Float32, dims...)
 
@@ -112,7 +118,7 @@ function make_particles(
     v[:, 1] .= cos.(theta) .* avg_v
     v[:, 2] .= sin.(theta) .* avg_v
 
-    return Particles(v, positions, dims, force, mass, A, B, scale, sigma)
+    return Particles(v, positions, new_positions, last_positions, dims, force, mass, A, B, scale, sigma)
 end
 
 
@@ -157,13 +163,14 @@ function calc_lennard_jones_force(
 end
 
 
-function calc_force(particles::Particles, config::Config)
+function calc_force(particles::Particles, config::Config, iteration::Int)
     particles.force[:, :] .= 0
     particles.force[:, 2] .= g * particles.m
-    shape_boxes = [size(config.boxes, 1), size(config.boxes, 2)] #, size(config.boxes, 3)]
+    shape_boxes = [size(config.boxes, 1), size(config.boxes, 2)]
 
     @sync Threads.@threads for j = 1:shape_boxes[1]
         for k = 1:shape_boxes[2]
+            config.new_boxes[j, k] = Vector{Int}()
             config.boxes[j, k] = Vector{Int}()
         end
     end
@@ -172,22 +179,26 @@ function calc_force(particles::Particles, config::Config)
     x = Int.(div.(particles.positions[:, 1], config.l_box)) .+ 1
     y = Int.(div.(particles.positions[:, 2], config.l_box)) .+ 1
     for i = 1:size(particles.positions, 1)
-        push!(config.boxes[x[i], y[i]], i)
+        push!(config.new_boxes[x[i], y[i]], i)
+    end
+
+    @sync Threads.@threads for j = 1:shape_boxes[1]
+        for k = 1:shape_boxes[2]
+            i_s = max(1, j - 1):min(shape_boxes[1], j + 1)
+            j_s = max(1, k - 1):min(shape_boxes[2], k + 1)
+            config.boxes[j, k] = collect(Iterators.flatten(config.new_boxes[i_s, j_s]))
+        end
     end
 
 
     @sync Threads.@threads for i = 2:size(particles.positions, 1)
         particle = particles.positions[i, :]
 
-        i_s = max(1, x[i] - 1):min(shape_boxes[1], x[i] + 1)
-        j_s = max(1, y[i] - 1):min(shape_boxes[2], y[i] + 1)
-
-        nearby_boxes =
-            filter(box -> box < i, collect(Iterators.flatten(config.boxes[i_s, j_s])))
-        if isempty(nearby_boxes)
+        nearby_indices = filter(particle_index -> particle_index < i, config.boxes[x[i], y[i]])
+        neighbour_particles = particles.positions[nearby_indices, :]
+        if isempty(neighbour_particles)
             continue
         end
-        neighbour_particles = particles.positions[nearby_boxes, :]
 
         result = calc_lennard_jones_force(
             particle,
@@ -196,14 +207,18 @@ function calc_force(particles::Particles, config::Config)
             particles.sigma,
         )
         particles.force[i, :] .+= result[1]
-        particles.force[nearby_boxes, :] .+= result[2]
+        particles.force[nearby_indices, :] .+= result[2]
     end
 
-    particles.v .+=
-        (particles.force ./ particles.m) .* config.delta_t
-    particles.positions .+=
-        particles.v .* config.delta_t .+
-        (((particles.force) ./ (2 * particles.m)) .* config.delta_t^2)
+    if iteration == 1
+        particles.new_positions .= particles.positions .+ particles.v .* config.delta_t .+ (((particles.force) ./ (2 * particles.m)) .* config.delta_t^2)
+    else
+        particles.v .= (particles.positions .- particles.last_positions)./config.delta_t
+        particles.new_positions .= particles.positions .+ particles.v.*config.delta_t .+ (((particles.force) ./ (particles.m)) .* config.delta_t^2)
+    end
+
+    particles.last_positions .= particles.positions
+    particles.positions .= particles.new_positions
 
     return particles
 end
@@ -216,33 +231,44 @@ function wall_interactions(
 )
     pressure::Float32 = Float32(0.0)
 
-    check = particles.positions[:, 1] .<= 0
-    particles.v[check, 1] .= -particles.v[check, 1]
-    particles.positions[check, 1] .= 0
-    pressure += 2 * sum(abs.(particles.v[check, 1]))
+    @sync Threads.@threads for i in 1:size(particles.positions, 1)
+        if particles.positions[i, 1] <= 0
+            v = (particles.positions[i, 1] - particles.last_positions[i, 1])/config.delta_t
+            particles.positions[i, 1] = 0
+            particles.last_positions[i, 1] = v*config.delta_t + particles.positions[i, 1]
+            pressure += 2 * sum(abs(v))
+        elseif particles.positions[i, 1] >= config.L[1]
+            v = (particles.positions[i, 1] - particles.last_positions[i, 1])/config.delta_t
+            particles.positions[i, 1] = config.L[1]
+            particles.last_positions[i, 1] = v*config.delta_t + config.L[1]
+            pressure += 2 * sum(abs(v))
+        end
 
-    check = particles.positions[:, 1] .>= config.L[1]
-    particles.v[check, 1] .= -particles.v[check, 1]
-    particles.positions[check, 1] .= config.L[1]
-    pressure += 2 * sum(abs.(particles.v[check, 1]))
+        if particles.positions[i, 2] <= 0
+            v = (particles.positions[i, 2] - particles.last_positions[i, 2])/config.delta_t
+            particles.positions[i, 2] = 0
+            particles.last_positions[i, 2] = v*config.delta_t + particles.positions[i, 2]
+            pressure += 2 * sum(abs(v))
 
-    check = particles.positions[:, 2] .<= 0
-    particles.v[check, 2] .= -particles.v[check, 2]
-    particles.positions[check, 2] .= 0
-    pressure += 2 * sum(abs.(particles.v[check, 2]))
-
-    if have_temp
-        norm = vec(sqrt.(sum(particles.v[check, :] .* particles.v[check, :], dims = 2)))
-        particles.scale = sqrt(temp * k_b / particles.m)
-        speed = maxwell.ppf(rand(sum(check)), scale = particles.scale)
-        particles.v[check, 1] .= particles.v[check, 1] ./ norm .* speed
-        particles.v[check, 2] .= particles.v[check, 2] ./ norm .* speed
+            if have_temp
+                norm = sqrt(sum(particles.v .* particles.v, dims = 2))
+                particles.scale = sqrt(temp * k_b / particles.m)
+                speed = maxwell.ppf(rand(1), scale = particles.scale)
+                v = zeros(Float32, 1, 2)
+                v[1] = (particles.positions[i, 1] - particles.last_positions[i, 1])/config.delta_t / norm * speed
+                v[2] = (particles.positions[i, 2] - particles.last_positions[i, 2])/config.delta_t / norm * speed
+                particles.last_positions[i, 1] = v[1]*config.delta_t + particles.positions[i, 1]
+                particles.last_positions[i, 2] = v[2]*config.delta_t + particles.positions[i, 2]
+            else
+                particles.last_positions[i, 2] = v*config.delta_t + particles.positions[i, 2]
+            end
+        elseif particles.positions[i, 2] >= config.L[2]
+            v = (particles.positions[i, 2] - particles.last_positions[i, 2])/config.delta_t
+            particles.positions[i, 2] = config.L[2]
+            particles.last_positions[i, 2] = v*config.delta_t + config.L[2]
+            pressure += 2 * sum(abs(v))
+        end
     end
-
-    check = particles.positions[:, 2] .>= config.L[2]
-    particles.v[check, 2] .= -particles.v[check, 2]
-    particles.positions[check, 2] .= config.L[2]
-    pressure += 2 * sum(abs.(particles.v[check, 2]))
 
     # Calculate and return pressure
     pressure = pressure * particles.m / (config.area * config.delta_t)
@@ -255,28 +281,29 @@ function get_cin_energy(particles::Particles)
     return u
 end
 
-function get_v2_t(particles::Particles)
+function get_v2_t(particles::Particles, dt::Float32)
     v2 = vec(sum(particles.v .* particles.v, dims = 2))
     v2_avg = sum(v2) / size(v2, 1)
     t = (v2_avg * particles.m)/(3 * k_b)
     return v2_avg, t
 end
 
-function get_maxwell_dist(particles::Particles)
-    v2, t = get_v2_t(particles)
+function get_maxwell_dist(particles::Particles, dt::Float32)
+    v2, t = get_v2_t(particles, dt)
     particles.scale = sqrt(t * k_b / particles.m)
-    max_val = maxwell.ppf(0.99, scale = particles.scale)
-    steps = 0.01f0
+    max_val = maxwell.ppf(0.999, scale = particles.scale)
+    if isnan(max_val)
+        max_val = 1f0
+    end
+    steps = 0.001f0
 
     v_s = collect(Float32, 0:steps:max_val)
 
-    a = sqrt(2/pi)/(particles.scale^3)
+    pdf = maxwell.pdf(v_s, scale=particles.scale)
 
-    pdf = a .* v_s .* exp.(-v_s ./ (2 * (particles.scale ^ 2)))
+    v2_val = maxwell.pdf(sqrt(v2), scale = particles.scale)
 
-    v2_val = maxwell.ppf(v2, scale = particles.scale)
-
-    return v2_val, v2, v_s, pdf
+    return v2_val, sqrt(v2), v_s, pdf
 end
 
 end

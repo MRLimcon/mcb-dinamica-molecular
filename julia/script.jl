@@ -25,8 +25,8 @@ sigma = Float32(0.2)
 dt = Float32(0.01)
 T = Float32(0)
 mass = Float32(1)
-L = [1f0, 1f0, 4f0]
-t_f = 1f0
+L = [2f0, 2f0, 4f0]
+t_f = 10f0
 
 
 
@@ -39,7 +39,7 @@ L = [4.0f0, 4.0f0, 4.0f0]
 t_f = 20f0"""
 iterations = Int(div(t_f, dt))
 
-particles = Utils.make_particles(N_particles, L, mass, sigma, T, true)
+particles = Utils.make_particles(N_particles, L, mass, sigma, T, false)
 consts = Utils.make_config(L, T, sigma, dt)
 
 plotted = scatter(
@@ -63,10 +63,11 @@ range = 1:iterations
 
 pressures = zeros(Float32, size(range))
 temperatures = zeros(Float32, size(range))
+
 for iter = 1:iterations
     println("$iter out of $iterations")
 
-    global particles = Utils.calc_force(particles, consts)
+    global particles = Utils.calc_force(particles, consts, iter)
 
     t = (iter - 1) * consts.delta_t
     if t < 10
@@ -74,7 +75,7 @@ for iter = 1:iterations
     else
         global pressures[iter], particles = Utils.wall_interactions(particles, consts, true, 1f0)
     end
-    v2, Temp = Utils.get_v2_t(particles)
+    v2, Temp = Utils.get_v2_t(particles, consts.delta_t)
     temperatures[iter] = Temp
     pressure = pressures[iter]
     println("Pressure: $pressure")
@@ -99,19 +100,18 @@ for iter = 1:iterations
 
     plot_pressure = plot(1:iter, pressures[1:iter], label = "Pressure")
     plot_temp = plot(1:iter, temperatures[1:iter], label= "Temperatures")
+    
+    v2_val, v2, v_s, pdf = Utils.get_maxwell_dist(particles, consts.delta_t)
+    dist = sqrt.(vec(sum(particles.v .* particles.v, dims = 2)))
 
-    display(plot(plotted, plot_pressure, plot_temp, layout = (2, 2)))
-    """
-
-    v2_val, v2, v_s, pdf = Utils.get_maxwell_dist(particles)
-    dist = Utils.get_cin_energy(particles) ./ ((particles.m * particles.m) * size(particles.positions, 1))
-
-    Plots.scatter([v2_val], [v2], label = "RMS Speed")
+    Plots.scatter([v2], [v2_val], label = "RMS Speed")
     Plots.plot!(v_s, pdf, label = "Maxwell Distribution")
-    Plots.histogram!(dist, normalize=:pdf, label = "Histogram")
-    display(plot!())
-    """
+    plot_dist = Plots.histogram!(dist, normalize=:pdf, label = "Histogram")
+
+    display(plot(plotted, plot_pressure, plot_temp, plot_dist, layout = (2, 2)))
+
 end
+
 bar_plot = bar(pressures, xlabel = "Iteration", ylabel = "Pressure", label = "Pressure", legend = :topleft)
 display(bar_plot)
 sleep(1)
