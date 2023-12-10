@@ -25,8 +25,8 @@ sigma = Float32(0.2)
 dt = Float32(0.01)
 T = Float32(0)
 mass = Float32(1)
-L = [2f0, 2f0, 4f0]
-t_f = 10f0
+L = [4.0f0, 4.0f0, 4.0f0]
+t_f = 10.0f0
 
 
 
@@ -73,7 +73,8 @@ for iter = 1:iterations
     if t < 10
         global pressures[iter], particles = Utils.wall_interactions(particles, consts) # 
     else
-        global pressures[iter], particles = Utils.wall_interactions(particles, consts, true, 1f0)
+        global pressures[iter], particles =
+            Utils.wall_interactions(particles, consts, true, 1.0f0)
     end
     v2, Temp = Utils.get_v2_t(particles, consts.delta_t)
     temperatures[iter] = Temp
@@ -81,7 +82,7 @@ for iter = 1:iterations
     println("Pressure: $pressure")
 
     camera_angle = t * 360.0
-    
+
     plotted = scatter(
         particles.positions[:, 1],
         particles.positions[:, 2],
@@ -99,22 +100,34 @@ for iter = 1:iterations
     )
 
     plot_pressure = plot(1:iter, pressures[1:iter], label = "Pressure")
-    plot_temp = plot(1:iter, temperatures[1:iter], label= "Temperatures")
-    
+    plot_temp = plot(1:iter, temperatures[1:iter], label = "Temperatures")
+
     v2_val, v2, v_s, pdf = Utils.get_maxwell_dist(particles, consts.delta_t)
     dist = sqrt.(vec(sum(particles.v .* particles.v, dims = 2)))
 
     Plots.scatter([v2], [v2_val], label = "RMS Speed")
     Plots.plot!(v_s, pdf, label = "Maxwell Distribution")
-    plot_dist = Plots.histogram!(dist, normalize=:pdf, label = "Histogram")
+    plot_dist = Plots.histogram!(dist, normalize = :pdf, label = "Histogram")
 
     display(plot(plotted, plot_pressure, plot_temp, plot_dist, layout = (2, 2)))
 
 end
 
-bar_plot = bar(pressures, xlabel = "Iteration", ylabel = "Pressure", label = "Pressure", legend = :topleft)
+bar_plot = bar(
+    pressures,
+    xlabel = "Iteration",
+    ylabel = "Pressure",
+    label = "Pressure",
+    legend = :topleft,
+)
 display(bar_plot)
 sleep(1)
-bar_plot = bar(temperatures, xlabel = "Iteration", ylabel = "Temperature", label = "Temperature", legend = :topleft)
+bar_plot = bar(
+    temperatures,
+    xlabel = "Iteration",
+    ylabel = "Temperature",
+    label = "Temperature",
+    legend = :topleft,
+)
 display(bar_plot)
 sleep(1)

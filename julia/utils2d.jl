@@ -9,9 +9,9 @@ maxwell = scipy.stats.maxwell
 
 const e_0 = Float32(0.00005)# Float32(8.8541878128e-12)
 const k_b = Float32(1) # .380649e-23)
-const g = Float32(0)
-const alpha = 5e-10
-const damping = 0
+const g = Float32(-0.5)
+const alpha = 1e-10
+const damping = 0.5f0
 
 mutable struct Config
     L::Vector{Float32}
@@ -118,7 +118,19 @@ function make_particles(
     v[:, 1] .= cos.(theta) .* avg_v
     v[:, 2] .= sin.(theta) .* avg_v
 
-    return Particles(v, positions, new_positions, last_positions, dims, force, mass, A, B, scale, sigma)
+    return Particles(
+        v,
+        positions,
+        new_positions,
+        last_positions,
+        dims,
+        force,
+        mass,
+        A,
+        B,
+        scale,
+        sigma,
+    )
 end
 
 
@@ -150,14 +162,11 @@ function calc_lennard_jones_force(
 
     x_force = calculated_force .* r[check, 1]
     y_force = calculated_force .* r[check, 2]
-    # z_force = calculated_force .* r[check, 3]
 
     particle_force[1] += sum(x_force)
     particle_force[2] += sum(y_force)
-    # particle_force[3] += sum(z_force)
     force[check, 1] .-= x_force
     force[check, 2] .-= y_force
-    # force[check, 3] .-= z_force
 
     return particle_force, force
 end
@@ -194,7 +203,8 @@ function calc_force(particles::Particles, config::Config, iteration::Int)
     @sync Threads.@threads for i = 2:size(particles.positions, 1)
         particle = particles.positions[i, :]
 
-        nearby_indices = filter(particle_index -> particle_index < i, config.boxes[x[i], y[i]])
+        nearby_indices =
+            filter(particle_index -> particle_index < i, config.boxes[x[i], y[i]])
         neighbour_particles = particles.positions[nearby_indices, :]
         if isempty(neighbour_particles)
             continue
@@ -210,11 +220,17 @@ function calc_force(particles::Particles, config::Config, iteration::Int)
         particles.force[nearby_indices, :] .+= result[2]
     end
 
+
     if iteration == 1
-        particles.new_positions .= particles.positions .+ particles.v .* config.delta_t .+ (((particles.force) ./ (2 * particles.m)) .* config.delta_t^2)
+        particles.new_positions .=
+            particles.positions .+ particles.v .* config.delta_t .+
+            (((particles.force) ./ (2 * particles.m)) .* config.delta_t^2)
     else
-        particles.v .= (particles.positions .- particles.last_positions)./config.delta_t
-        particles.new_positions .= particles.positions .+ particles.v.*config.delta_t .+ (((particles.force) ./ (particles.m)) .* config.delta_t^2)
+        particles.v .= (particles.positions .- particles.last_positions) ./ config.delta_t
+        particles.force .-= particles.v .* damping
+        particles.new_positions .=
+            particles.positions .+ particles.v .* config.delta_t .+
+            (((particles.force) ./ (particles.m)) .* config.delta_t^2)
     end
 
     particles.last_positions .= particles.positions
@@ -231,23 +247,29 @@ function wall_interactions(
 )
     pressure::Float32 = Float32(0.0)
 
-    @sync Threads.@threads for i in 1:size(particles.positions, 1)
+    @sync Threads.@threads for i = 1:size(particles.positions, 1)
         if particles.positions[i, 1] <= 0
-            v = (particles.positions[i, 1] - particles.last_positions[i, 1])/config.delta_t
+            v =
+                (particles.positions[i, 1] - particles.last_positions[i, 1]) /
+                config.delta_t
             particles.positions[i, 1] = 0
-            particles.last_positions[i, 1] = v*config.delta_t + particles.positions[i, 1]
+            particles.last_positions[i, 1] = v * config.delta_t + particles.positions[i, 1]
             pressure += 2 * sum(abs(v))
         elseif particles.positions[i, 1] >= config.L[1]
-            v = (particles.positions[i, 1] - particles.last_positions[i, 1])/config.delta_t
+            v =
+                (particles.positions[i, 1] - particles.last_positions[i, 1]) /
+                config.delta_t
             particles.positions[i, 1] = config.L[1]
-            particles.last_positions[i, 1] = v*config.delta_t + config.L[1]
+            particles.last_positions[i, 1] = v * config.delta_t + config.L[1]
             pressure += 2 * sum(abs(v))
         end
 
         if particles.positions[i, 2] <= 0
-            v = (particles.positions[i, 2] - particles.last_positions[i, 2])/config.delta_t
+            v =
+                (particles.positions[i, 2] - particles.last_positions[i, 2]) /
+                config.delta_t
             particles.positions[i, 2] = 0
-            particles.last_positions[i, 2] = v*config.delta_t + particles.positions[i, 2]
+            particles.last_positions[i, 2] = v * config.delta_t + particles.positions[i, 2]
             pressure += 2 * sum(abs(v))
 
             if have_temp
@@ -255,17 +277,26 @@ function wall_interactions(
                 particles.scale = sqrt(temp * k_b / particles.m)
                 speed = maxwell.ppf(rand(1), scale = particles.scale)
                 v = zeros(Float32, 1, 2)
-                v[1] = (particles.positions[i, 1] - particles.last_positions[i, 1])/config.delta_t / norm * speed
-                v[2] = (particles.positions[i, 2] - particles.last_positions[i, 2])/config.delta_t / norm * speed
-                particles.last_positions[i, 1] = v[1]*config.delta_t + particles.positions[i, 1]
-                particles.last_positions[i, 2] = v[2]*config.delta_t + particles.positions[i, 2]
+                v[1] =
+                    (particles.positions[i, 1] - particles.last_positions[i, 1]) /
+                    config.delta_t / norm * speed
+                v[2] =
+                    (particles.positions[i, 2] - particles.last_positions[i, 2]) /
+                    config.delta_t / norm * speed
+                particles.last_positions[i, 1] =
+                    v[1] * config.delta_t + particles.positions[i, 1]
+                particles.last_positions[i, 2] =
+                    v[2] * config.delta_t + particles.positions[i, 2]
             else
-                particles.last_positions[i, 2] = v*config.delta_t + particles.positions[i, 2]
+                particles.last_positions[i, 2] =
+                    v * config.delta_t + particles.positions[i, 2]
             end
         elseif particles.positions[i, 2] >= config.L[2]
-            v = (particles.positions[i, 2] - particles.last_positions[i, 2])/config.delta_t
+            v =
+                (particles.positions[i, 2] - particles.last_positions[i, 2]) /
+                config.delta_t
             particles.positions[i, 2] = config.L[2]
-            particles.last_positions[i, 2] = v*config.delta_t + config.L[2]
+            particles.last_positions[i, 2] = v * config.delta_t + config.L[2]
             pressure += 2 * sum(abs(v))
         end
     end
@@ -284,7 +315,7 @@ end
 function get_v2_t(particles::Particles, dt::Float32)
     v2 = vec(sum(particles.v .* particles.v, dims = 2))
     v2_avg = sum(v2) / size(v2, 1)
-    t = (v2_avg * particles.m)/(3 * k_b)
+    t = (v2_avg * particles.m) / (3 * k_b)
     return v2_avg, t
 end
 
@@ -293,13 +324,13 @@ function get_maxwell_dist(particles::Particles, dt::Float32)
     particles.scale = sqrt(t * k_b / particles.m)
     max_val = maxwell.ppf(0.999, scale = particles.scale)
     if isnan(max_val)
-        max_val = 1f0
+        max_val = 1.0f0
     end
     steps = 0.001f0
 
     v_s = collect(Float32, 0:steps:max_val)
 
-    pdf = maxwell.pdf(v_s, scale=particles.scale)
+    pdf = maxwell.pdf(v_s, scale = particles.scale)
 
     v2_val = maxwell.pdf(sqrt(v2), scale = particles.scale)
 

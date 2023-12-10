@@ -215,8 +215,7 @@ function calc_force(particles::Particles, config::Config)
         particles.force[nearby_boxes, :] .+= result[2]
     end
 
-    particles.v .+=
-        (particles.force ./ particles.m) .* config.delta_t
+    particles.v .+= (particles.force ./ particles.m) .* config.delta_t
     particles.positions .+=
         particles.v .* config.delta_t .+
         (((particles.force) ./ (2 * particles.m)) .* config.delta_t^2)
